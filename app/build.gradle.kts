@@ -17,6 +17,20 @@ android {
         versionName = "0.1.0"
     }
 
+    // Release signing comes from the environment (CI secrets, or your shell; see README).
+    // Without KEYSTORE_FILE the release build is unsigned and cannot be installed.
+    val keystoreFile = System.getenv("KEYSTORE_FILE")
+    if (keystoreFile != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(keystoreFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS") ?: "pina-admin"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // Dev server on the Mac, reached from the phone via `adb reverse tcp:3000 tcp:3000`.
@@ -25,6 +39,7 @@ android {
         release {
             isMinifyEnabled = false
             buildConfigField("String", "ADMIN_BASE_URL", "\"https://admin.mypina.co.uk\"")
+            if (keystoreFile != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 

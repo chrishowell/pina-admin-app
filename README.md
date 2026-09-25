@@ -51,6 +51,47 @@ Enable USB debugging on the phone, or pair over Wi-Fi with `adb pair`.
 | debug   | `http://localhost:3000`        | allowed for `localhost`, `10.0.2.2`, `admin.localhost` only |
 | release | `https://admin.mypina.co.uk`   | none                                                       |
 
+### Release signing
+
+The release build is signed with a keystore that lives outside the repo. Create it once:
+
+```sh
+mkdir -p ~/.pina-admin && chmod 700 ~/.pina-admin
+openssl rand -base64 30 | tr -d '/+=' > ~/.pina-admin/keystore.password
+keytool -genkeypair -keystore ~/.pina-admin/release.jks -alias pina-admin \
+  -keyalg RSA -keysize 2048 -validity 10000 \
+  -storepass:file ~/.pina-admin/keystore.password -keypass:file ~/.pina-admin/keystore.password \
+  -dname "CN=Pina Admin, O=Pina"
+```
+
+Then give it to GitHub Actions as repository secrets (the release job decodes it):
+
+```sh
+gh secret set KEYSTORE_BASE64 --body "$(base64 -i ~/.pina-admin/release.jks)"
+gh secret set KEYSTORE_PASSWORD < ~/.pina-admin/keystore.password
+```
+
+Locally, `app/build.gradle.kts` reads `KEYSTORE_FILE`, `KEYSTORE_PASSWORD` and optionally
+`KEY_ALIAS` (default `pina-admin`) and `KEY_PASSWORD` (default: the store password):
+
+```sh
+KEYSTORE_FILE=~/.pina-admin/release.jks KEYSTORE_PASSWORD="$(cat ~/.pina-admin/keystore.password)" \
+  ./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+Without `KEYSTORE_FILE` the release APK is unsigned and won't install. Debug and release share the
+application id, so switching between them on a phone needs `adb uninstall uk.co.mypina.admin`
+first (the signatures differ). Back up `~/.pina-admin`: losing the keystore means every future
+release build has to be reinstalled from scratch on each phone.
+
+### CI
+
+`.github/workflows/android.yml` runs the unit tests and builds the debug APK on every push and
+pull request (download it from the run's artifacts). Pushing a tag like `v0.2.0` also builds the
+signed release APK and attaches both APKs to a GitHub Release. The release job is skipped when the
+`KEYSTORE_BASE64` secret is not set.
+
 ### Pointing a debug build at the dev server
 
 `admin.localhost` doesn't resolve on a phone, so the debug build uses plain `localhost:3000` and
