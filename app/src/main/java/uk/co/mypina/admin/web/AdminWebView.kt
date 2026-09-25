@@ -39,11 +39,12 @@ class WebState {
 private const val SCHEME = "pina-admin"
 private const val WRITE_TAG_HOST = "write-tag"
 private const val VERIFY_TAG_HOST = "verify-tag"
+private const val IDENTIFY_TAG_HOST = "identify-tag"
 private val TAG_ID = Regex("^[A-Za-z0-9_-]{1,64}$")
 
 /**
  * Builds the one WebView the app uses. It's owned by the activity (not by composition) so its
- * history survives the trip to a native screen (Write, Verify) and back.
+ * history survives the trip to a native screen (Write, Verify, Identify) and back.
  */
 @SuppressLint("SetJavaScriptEnabled")
 fun createAdminWebView(
@@ -51,6 +52,7 @@ fun createAdminWebView(
     state: WebState,
     onWriteTag: (tagId: String) -> Unit,
     onVerifyTag: (tagId: String?) -> Unit,
+    onIdentifyTag: () -> Unit,
 ): WebView {
     WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
     val webView = WebView(activity)
@@ -89,6 +91,8 @@ fun createAdminWebView(
                         tagId == null -> onVerifyTag(null)
                         TAG_ID.matches(tagId) -> onVerifyTag(tagId)
                     }
+                    // pina-admin://identify-tag (exactly; no id)
+                    IDENTIFY_TAG_HOST -> if (tagId == null) onIdentifyTag()
                 }
                 return true
             }

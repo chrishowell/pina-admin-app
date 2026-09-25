@@ -104,6 +104,7 @@ data class VerifyResponse(
  *    409 { error: "notApproved" | "uidTaken" | "replayed" }; 503 { error: "keys_missing" }
  *  - verify: 400 { error: "malformed" | "bad_cmac" }; 404 { error: "unknown_tag" };
  *    409 { error: "unsigned" }; 503 { error: "keys_missing" }
+ *  - identify: 400 { error: "malformed" } (bad uid)
  * `tag` and `shop` are kept loose (string or object) since only their display text is used.
  * Unrecognised codes fall back to [uk.co.mypina.admin.api.ApiException.Rejected], which shows
  * the code as-is.
@@ -113,4 +114,52 @@ data class ErrorBody(
     val error: String,
     val tag: JsonElement? = null,
     val shop: JsonElement? = null,
+)
+
+/** POST /admin/api/tags/identify. [url] is omitted (not sent as null) when the chip had none. */
+@Serializable
+data class IdentifyRequest(val uid: String, val url: String? = null)
+
+/** A tag row as the identify endpoint describes it. */
+@Serializable
+data class TagSummary(
+    val id: String,
+    val code: String,
+    val label: String? = null,
+    val shopId: String,
+    val shopName: String,
+    val shopStatus: String,
+    val active: Boolean,
+    val authMode: String,
+    /** When the tag was last written (ISO 8601), or null if never. */
+    val encodedAt: String? = null,
+    val lastCounter: Long,
+    val keyVersion: Int? = null,
+)
+
+/**
+ * What the server made of the URL read from the chip. [signature] is one of "ok", "bad_cmac",
+ * "malformed", "unsigned", "unknown_tag", "keys_missing". [tagCode] is the code in the URL (if it
+ * is a Piña tap URL) and [urlTag] the row with that code (if any).
+ */
+@Serializable
+data class IdentifiedChip(
+    val url: String,
+    val tagCode: String? = null,
+    val urlTag: TagSummary? = null,
+    val signature: String,
+    val counter: Long? = null,
+    val fresh: Boolean? = null,
+    val uidMatches: Boolean? = null,
+)
+
+/**
+ * 200 from POST /admin/api/tags/identify. [boundTag] is the row this chip's UID is bound to (if
+ * any); [chip] is null when no URL was sent (blank chip, or not an NTAG 424 DNA).
+ */
+@Serializable
+data class IdentifyResponse(
+    val uid: String,
+    val boundTag: TagSummary? = null,
+    val chip: IdentifiedChip? = null,
 )

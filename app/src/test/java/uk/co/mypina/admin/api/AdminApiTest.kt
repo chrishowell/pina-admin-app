@@ -301,4 +301,75 @@ class AdminApiTest {
         enqueue(503, """{"error":"keys_missing"}""")
         assertFailsWith<ApiException.KeysMissing> { verify() }
     }
+
+    // ---- identify ----------------------------------------------------------------------------
+
+    private val tagJson =
+        """{"id":"tag-1","code":"ABC1234","label":"Table 4","shopId":"s1","shopName":"The Anchor","shopStatus":"approved",
+           "active":true,"authMode":"sun","encodedAt":"2026-09-20T10:00:00.000Z","lastCounter":11,"keyVersion":1,"future":1}"""
+
+    @Test fun `identify with a url posts uid and url and parses bound tag and chip`() {
+        enqueue(
+            200,
+            """{"uid":"04958CAA5C5E80","boundTag":$tagJson,
+               "chip":{"url":"$chipUrl","tagCode":"ABC1234","urlTag":$tagJson,"signature":"ok","counter":12,
+                       "fresh":true,"uidMatches":true,"future":"x"},
+               "futureField":"x"}""",
+        )
+        val r = api.identify("04958CAA5C5E80", chipUrl)
+        assertEquals("04958CAA5C5E80", r.uid)
+        val bound = r.boundTag!!
+        assertEquals("tag-1", bound.id)
+        assertEquals("The Anchor", bound.shopName)
+        assertEquals("approved", bound.shopStatus)
+        assertTrue(bound.active)
+        assertEquals(11L, bound.lastCounter)
+        assertEquals(1, bound.keyVersion)
+        val chip = r.chip!!
+        assertEquals("ok", chip.signature)
+        assertEquals("ABC1234", chip.tagCode)
+        assertEquals("tag-1", chip.urlTag?.id)
+        assertEquals(12L, chip.counter)
+        assertEquals(true, chip.fresh)
+        assertEquals(true, chip.uidMatches)
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/admin/api/tags/identify", request.path)
+        assertEquals("""{"uid":"04958CAA5C5E80","url":"$chipUrl"}""", request.body.readUtf8())
+    }
+
+    @Test fun `identify without a url omits it and accepts nulls`() {
+        enqueue(200, """{"uid":"04958CAA5C5E80","boundTag":null,"chip":null}""")
+        val r = api.identify("04958CAA5C5E80", null)
+        assertEquals(null, r.boundTag)
+        assertEquals(null, r.chip)
+        assertEquals("""{"uid":"04958CAA5C5E80"}""", server.takeRequest().body.readUtf8())
+    }
+
+    @Test fun `identify chip with nullable fields null`() {
+        enqueue(
+            200,
+            """{"uid":"04AA","boundTag":{"id":"t","code":"C","label":null,"shopId":"s","shopName":"S","shopStatus":"pending",
+                 "active":false,"authMode":"none","encodedAt":null,"lastCounter":0,"keyVersion":null},
+               "chip":{"url":"https://example.com/","tagCode":null,"urlTag":null,"signature":"malformed",
+                       "counter":null,"fresh":null,"uidMatches":null}}""",
+        )
+        val r = api.identify("04AA", "https://example.com/")
+        assertEquals(null, r.boundTag!!.encodedAt)
+        assertEquals(null, r.boundTag!!.keyVersion)
+        assertFalse(r.boundTag!!.active)
+        assertEquals("malformed", r.chip!!.signature)
+        assertEquals(null, r.chip!!.urlTag)
+    }
+
+    @Test fun `identify 401 is NotSignedIn`() {
+        enqueue(401, """{"error":"unauthorized"}""")
+        assertFailsWith<ApiException.NotSignedIn> { api.identify("04AA", null) }
+    }
+
+    @Test fun `identify 400 malformed`() {
+        enqueue(400, """{"error":"malformed"}""")
+        assertFailsWith<ApiException.Malformed> { api.identify("XYZ", null) }
+    }
 }

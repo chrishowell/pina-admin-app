@@ -1,8 +1,9 @@
 # Piña Admin
 
-Android app for the Piña admin site: admin.mypina.co.uk in a web view, plus two native screens:
-**Write tag** personalises an NTAG 424 DNA tag (URL, SDM and keys) in one go, and **Verify tag**
-reads a tag the way a customer's phone would and asks the server whether it checks out. See
+Android app for the Piña admin site: admin.mypina.co.uk in a web view, plus three native screens:
+**Write tag** personalises an NTAG 424 DNA tag (URL, SDM and keys) in one go, **Verify tag**
+reads a tag the way a customer's phone would and asks the server whether it checks out, and
+**Identify tag** describes any chip (which tag its UID is bound to, and what its URL says). See
 `guide.md` for the plan.
 
 ## Tooling (macOS, no Android Studio needed)
@@ -121,11 +122,13 @@ host `localhost` (the guide's host routing treats localhost as admin in dev). On
   `pina-admin://write-tag/<tagId>`. The web view intercepts it and opens the Write screen.
 - `pina-admin://verify-tag` or `pina-admin://verify-tag/<tagId>` (same id pattern, optional)
   opens the Verify screen; see [Verify tag](#verify-tag).
+- `pina-admin://identify-tag` (exactly, no id; linked from the website's all-tags page) opens the
+  Identify screen; see [Identify tag](#identify-tag).
 - Links off the admin host open in the phone's browser. Back walks web history; exits at the root.
-- Both native screens sit in `ui/NfcReaderScreen` (top bar, back = close, screen kept on, NFC
+- The native screens sit in `ui/NfcReaderScreen` (top bar, back = close, screen kept on, NFC
   reader mode with `FLAG_READER_NFC_A | FLAG_READER_SKIP_NDEF_CHECK` only while resumed, no-NFC /
   NFC-off notice) and get a fresh ViewModel per visit from `ui/ScopedViewModelStore`. Tags are
-  connected with `nfc/IsoDepConnect.kt` (`IsoDep.get`, `connect()`, 5 s timeout). Done on either
+  connected with `nfc/IsoDepConnect.kt` (`IsoDep.get`, `connect()`, 5 s timeout). Done on any
   screen returns to the web view and reloads the page.
 - The Write screen (`write/`) also marks the window `FLAG_SECURE` (keys pass through it). It
   hands a connected `IsoDep` to a `TagWriter` on `Dispatchers.IO`.
@@ -177,6 +180,49 @@ absent) and the session cookie:
 Reader mode stays on after a result or an error: holding another tag (or the same one again) to
 the phone starts a new check, and **Scan another** clears the card. **Done** goes back to the web
 view and reloads the page. The chip is closed right after its one read, before the server call.
+
+## Identify tag
+
+Opened from the website's all-tags page with `pina-admin://identify-tag`. Hold **any** chip to the
+phone and the app says what it is. No keys are involved, so the screen isn't `FLAG_SECURE`.
+
+**Per tap** (`identify/IdentifyTagViewModel.kt`):
+
+1. **UID** from the ISO-DEP tag id: 7 bytes, not starting `08`. A 4-byte or `08…` id is a Random
+   ID → "Random ID chip, not a Piña chip." and nothing is sent.
+2. **The read**, reusing `TagVerifier` (select + exactly one plain ReadData, as for Verify), folded
+   by `readChip` into a `ChipRead`: a URL; **blank** (NLEN 0 / no URI record, `NO_URL`); **not an
+   NTAG 424 DNA** (select refused, `NOT_NTAG424`, or no ISO-DEP at all; still identified by UID
+   with the note "Not an NTAG 424 DNA (select refused)"); or read refused (the status is a note).
+   A lost tag is an error ("Hold it again").
+3. **One server call**: `POST {base}/admin/api/tags/identify` with `{ uid, url? }` (`url` omitted
+   when there is none). 200 is `{ uid, boundTag, chip }`: `boundTag` is the row the UID is bound to
+   (or null), `chip` is null without a URL, else `{ url, tagCode, urlTag, signature, counter, fresh,
+   uidMatches }` with `signature` one of `ok`, `bad_cmac`, `malformed`, `unsigned`, `unknown_tag`,
+   `keys_missing`. Tags come as `TagSummary { id, code, label, shopId, shopName, shopStatus, active,
+   authMode, encodedAt?, lastCounter, keyVersion? }`. 401 / 3xx → sign in; 400 `malformed` → "The
+   server refused this chip's UID"; other errors as elsewhere.
+
+**The verdict** (`identify/IdentifyVerdict.kt`, pure, one test per case):
+
+| Case | Top line |
+|---|---|
+| no URL, not bound | Blank chip, not bound to any tag |
+| no URL, bound | Blank chip, but its UID is bound to tag CODE at SHOP (the row expects this chip; write it) |
+| `ok`, URL tag = bound tag, UID matches | Tag CODE at SHOP, signature OK |
+| `ok`, UID unbound or bound to another row | Written for tag CODE, but the UID is bound to none / tag X at Y |
+| `ok`, `uidMatches` false | The URL was written for a different chip (UID in URL ≠ this chip) |
+| `bad_cmac` | Signature invalid: written by another server or tampered (URL tag still shown) |
+| `unknown_tag` | URL points at tag CODE, which doesn't exist on this server |
+| `unsigned` | Demo tag CODE (no signature) |
+| `malformed` | Has a URL, but not a Piña tap URL |
+| `keys_missing` | Server has no NFC keys; can't check the signature |
+
+Below it: the tag's code, shop, label, shop status, active/off, written-on date, server counter
+and key version; the chip counter as "N, fresh" or "N, already seen" against the server's; and
+always the UID and the URL (if any) at the foot. When the UID is bound to a different row than
+the URL names, a note says so. Reader mode stays on: holding another tag starts over, **Scan
+another** clears the card, **Done** goes back to the web view and reloads it.
 
 ## Reset chip to factory keys
 
@@ -260,6 +306,10 @@ rev 2.0 (`app/src/test/.../An12196.kt`). The library's RndA comes from the publi
   record, and refused select / ReadData. `VerifyVerdictTest`: the verdict line and reasons, and the
   error messages. `AdminApiTest`: `verify` request body and path (with and without tagId), success
   parsing, and each error code (401, malformed, bad_cmac, unknown_tag, unsigned, keys_missing).
+- **Identify** (`IdentifyVerdictTest`): each verdict case above, select refused / read refused
+  notes, the `TagReadException` → `ChipRead` mapping, the UID rule (7 bytes, not `08`) and error
+  messages. `AdminApiTest`: `identify` with and without a URL (body, path, nullable fields), 401
+  and 400 malformed.
 - **Reset** (`ChipResetTest`, checked by `RefSession`/`RefAuthChip`): a full reset from version-1
   keys (each ChangeKey payload decrypted: derived key ⊕ zeros, version 0, CRC of the zero key; key
   0 last; then versions 0/0/0), an already-factory chip (Table 14, no ChangeKey), a factory key 0

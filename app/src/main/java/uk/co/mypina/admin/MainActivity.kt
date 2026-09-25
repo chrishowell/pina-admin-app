@@ -13,6 +13,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import uk.co.mypina.admin.api.AdminApi
+import uk.co.mypina.admin.identify.IdentifyTagScreen
+import uk.co.mypina.admin.identify.readChip
 import uk.co.mypina.admin.nfc.TagVerifier
 import uk.co.mypina.admin.nfc.TagWriters
 import uk.co.mypina.admin.ui.theme.PinaTheme
@@ -38,6 +40,7 @@ class MainActivity : ComponentActivity() {
             state = webState,
             onWriteTag = { tagId -> screen = Screen.WriteTag(tagId) },
             onVerifyTag = { tagId -> screen = Screen.VerifyTag(tagId) },
+            onIdentifyTag = { screen = Screen.IdentifyTag },
         )
         if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) {
             webView.loadUrl(AdminConfig.startUrl)
@@ -71,6 +74,13 @@ class MainActivity : ComponentActivity() {
                                 tagId = current.tagId,
                                 readUrl = { iso -> TagVerifier.readUrl(iso) },
                                 verify = api::verify,
+                                onClose = backToWeb,
+                            )
+                        }
+                        Screen.IdentifyTag -> ScopedViewModelStore(key = current) {
+                            IdentifyTagScreen(
+                                readChip = { iso -> readChip { TagVerifier.readUrl(iso) } },
+                                identify = api::identify,
                                 onClose = backToWeb,
                             )
                         }

@@ -55,7 +55,7 @@ sealed class ApiException(message: String, cause: Throwable? = null) : Exception
 }
 
 /**
- * Blocking client for the admin tag endpoints (personalise, personalised, verify). Call from a background thread.
+ * Blocking client for the admin tag endpoints (personalise, personalised, verify, identify). Call from a background thread.
  * Authenticates with the web view's own session cookie (pina_a); stores nothing itself.
  * Never logs request or response bodies (they carry keys).
  */
@@ -91,6 +91,17 @@ class AdminApi(
             listOf("verify"),
             json.encodeToString(VerifyRequest.serializer(), VerifyRequest(url, tagId)),
             VerifyResponse.serializer(),
+        )
+
+    /**
+     * POST /admin/api/tags/identify: describes any chip by its [uid] and, if it had one, the [url]
+     * read from it (omitted when null). Sends no keys and receives none.
+     */
+    fun identify(uid: String, url: String?): IdentifyResponse =
+        post(
+            listOf("identify"),
+            json.encodeToString(IdentifyRequest.serializer(), IdentifyRequest(uid, url)),
+            IdentifyResponse.serializer(),
         )
 
     private fun <T> post(tagId: String, action: String, body: String, serializer: KSerializer<T>): T =

@@ -6,4 +6,6 @@ sealed interface Screen {
     data class WriteTag(val tagId: String) : Screen
     /** [tagId] is the tag page the admin came from (`pina-admin://verify-tag/<id>`), or null. */
     data class VerifyTag(val tagId: String?) : Screen
+    /** `pina-admin://identify-tag`: describe any chip held to the phone. */
+    data object IdentifyTag : Screen
 }

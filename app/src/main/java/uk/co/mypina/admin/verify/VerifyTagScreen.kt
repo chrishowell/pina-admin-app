@@ -167,7 +167,7 @@ private fun UrlLine(url: String) {
 private val DATE = DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm", Locale.UK)
 
 /** ISO 8601 from the server as a local date and time; the raw text if it doesn't parse. */
-private fun formatDate(iso: String?): String {
+internal fun formatDate(iso: String?): String {
     if (iso.isNullOrBlank()) return "Not recorded"
     val instant = runCatching { Instant.parse(iso) }.getOrNull()
         ?: runCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
