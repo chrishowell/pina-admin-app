@@ -1,6 +1,7 @@
 package uk.co.mypina.admin.nfc
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import uk.co.mypina.admin.nfc.An12196 as V
@@ -117,5 +118,81 @@ class TagVerifierTest {
     @Test fun shortResponse_isAnIoError() {
         val fake = FakeTransceiver().select().expect("ReadData", readAll, "91")
         assertThrows(java.io.IOException::class.java) { readUrl(fake) }
+    }
+
+    // ---- Identify: select, one ReadData, GetKeyVersion 0/1/2 ------------------------------------
+
+    private fun FakeTransceiver.keyVersions(v0: Int, v1: Int, v2: Int) = apply {
+        listOf(v0, v1, v2).forEachIndexed { k, v -> expect("GetKeyVersion $k", "90640000010${k}00", "%02X9100".format(v)) }
+    }
+
+    @Test fun identify_apdusAreSelectReadDataThenThreeGetKeyVersions() {
+        assertEquals("90640000010000", TagVerifier.getKeyVersion(0).toHex())
+        assertEquals("90640000010100", TagVerifier.getKeyVersion(1).toHex())
+        assertEquals("90640000010200", TagVerifier.getKeyVersion(2).toHex())
+
+        val fake = FakeTransceiver()
+            .select()
+            .expect("ReadData file 02, 256 bytes", readAll, mirroredFile().toHex() + "9100")
+            .keyVersions(1, 1, 1)
+
+        val r = TagVerifier(fake).readForIdentify()
+        assertEquals(expectedUrl, r.url)
+        assertNull(r.noUrl)
+        assertEquals(listOf(1, 1, 1), r.keyVersions)
+        fake.assertDone()
+        assertEquals(
+            listOf(V.T22_SELECT, readAll, "90640000010000", "90640000010100", "90640000010200"),
+            fake.sent,
+        )
+        assertEquals("one ReadData only", 1, fake.sent.count { it.startsWith("90AD") })
+    }
+
+    @Test fun identify_blankChip_stillReadsKeyVersions() {
+        val fake = FakeTransceiver()
+            .select()
+            .expect("ReadData", readAll, "00".repeat(256) + "9100")
+            .keyVersions(0, 0, 0)
+        val r = TagVerifier(fake).readForIdentify()
+        assertNull(r.url)
+        assertEquals(TagReadException.Kind.NO_URL, r.noUrl?.kind)
+        assertEquals(listOf(0, 0, 0), r.keyVersions)
+        fake.assertDone()
+    }
+
+    @Test fun identify_readRefused_stillReadsKeyVersions() {
+        val fake = FakeTransceiver().select().expect("ReadData", readAll, "919D").keyVersions(0, 1, 1)
+        val r = TagVerifier(fake).readForIdentify()
+        assertEquals(TagReadException.Kind.REFUSED, r.noUrl?.kind)
+        assertEquals(listOf(0, 1, 1), r.keyVersions)
+        fake.assertDone()
+    }
+
+    @Test fun identify_getKeyVersionRefused_givesNullVersions() {
+        val fake = FakeTransceiver()
+            .select()
+            .expect("ReadData", readAll, mirroredFile().toHex() + "9100")
+            .expect("GetKeyVersion 0, refused", "90640000010000", "919D")
+        val r = TagVerifier(fake).readForIdentify()
+        assertEquals(expectedUrl, r.url)
+        assertNull(r.keyVersions)
+        fake.assertDone()
+    }
+
+    @Test fun identify_getKeyVersionRefusedLater_givesNullVersions() {
+        val fake = FakeTransceiver()
+            .select()
+            .expect("ReadData", readAll, mirroredFile().toHex() + "9100")
+            .expect("GetKeyVersion 0", "90640000010000", "019100")
+            .expect("GetKeyVersion 1, refused", "90640000010100", "917E")
+        assertNull(TagVerifier(fake).readForIdentify().keyVersions)
+        fake.assertDone()
+    }
+
+    @Test fun identify_selectRefused_throws() {
+        val fake = FakeTransceiver().expect("select", V.T22_SELECT, "6A82")
+        val e = assertThrows(TagReadException::class.java) { TagVerifier(fake).readForIdentify() }
+        assertEquals(TagReadException.Kind.NOT_NTAG424, e.kind)
+        fake.assertDone()
     }
 }

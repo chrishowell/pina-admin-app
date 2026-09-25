@@ -190,8 +190,13 @@ phone and the app says what it is. No keys are involved, so the screen isn't `FL
 
 1. **UID** from the ISO-DEP tag id: 7 bytes, not starting `08`. A 4-byte or `08…` id is a Random
    ID → "Random ID chip, not a Piña chip." and nothing is sent.
-2. **The read**, reusing `TagVerifier` (select + exactly one plain ReadData, as for Verify), folded
-   by `readChip` into a `ChipRead`: a URL; **blank** (NLEN 0 / no URI record, `NO_URL`); **not an
+2. **The read**, `TagVerifier.readForIdentify`: select + exactly one plain ReadData (as for
+   Verify), then **GetKeyVersion for keys 0, 1 and 2** (`90 64 00 00 01 00 00`, `… 01 …`,
+   `… 02 …` → `VV 91 00`; plain, unauthenticated, and they don't touch SDMReadCtr, so the tap
+   still costs one counter value). A blank or refused ReadData still reads the key versions; if the
+   chip refuses a GetKeyVersion the versions are unknown rather than an error. Verify's `readUrl`
+   is unchanged (no GetKeyVersion). Folded by `scanChip` into a `ChipScan` (a `ChipRead` plus the
+   versions). The `ChipRead` is: a URL; **blank** (NLEN 0 / no URI record, `NO_URL`); **not an
    NTAG 424 DNA** (select refused, `NOT_NTAG424`, or no ISO-DEP at all; still identified by UID
    with the note "Not an NTAG 424 DNA (select refused)"); or read refused (the status is a note).
    A lost tag is an error ("Hold it again").
@@ -199,7 +204,7 @@ phone and the app says what it is. No keys are involved, so the screen isn't `FL
    when there is none). 200 is `{ uid, boundTag, chip }`: `boundTag` is the row the UID is bound to
    (or null), `chip` is null without a URL, else `{ url, tagCode, urlTag, signature, counter, fresh,
    uidMatches }` with `signature` one of `ok`, `bad_cmac`, `malformed`, `unsigned`, `unknown_tag`,
-   `keys_missing`. Tags come as `TagSummary { id, code, label, shopId, shopName, shopStatus, active,
+   `keys_missing`, `factory` (the URL's signature verifies with all-zero keys: a reset chip). Tags come as `TagSummary { id, code, label, shopId, shopName, shopStatus, active,
    authMode, encodedAt?, lastCounter, keyVersion? }`. 401 / 3xx → sign in; 400 `malformed` → "The
    server refused this chip's UID"; other errors as elsewhere.
 
@@ -212,14 +217,20 @@ phone and the app says what it is. No keys are involved, so the screen isn't `FL
 | `ok`, URL tag = bound tag, UID matches | Tag CODE at SHOP, signature OK |
 | `ok`, UID unbound or bound to another row | Written for tag CODE, but the UID is bound to none / tag X at Y |
 | `ok`, `uidMatches` false | The URL was written for a different chip (UID in URL ≠ this chip) |
-| `bad_cmac` | Signature invalid: written by another server or tampered (URL tag still shown) |
+| `factory`, or `bad_cmac` with keys reading 0/0/0 | Reset chip: factory keys, still carrying the URL for tag CODE at SHOP. Write it from the server you want to own it. (warning) |
+| `bad_cmac`, keys all at Piña version N | Written by another server (keys at version N, signature doesn't match this server) |
+| `bad_cmac`, keys mixed or unknown | Signature invalid: written by another server or tampered (URL tag still shown) |
 | `unknown_tag` | URL points at tag CODE, which doesn't exist on this server |
 | `unsigned` | Demo tag CODE (no signature) |
 | `malformed` | Has a URL, but not a Piña tap URL |
 | `keys_missing` | Server has no NFC keys; can't check the signature |
 
 Below it: the tag's code, shop, label, shop status, active/off, written-on date, server counter
-and key version; the chip counter as "N, fresh" or "N, already seen" against the server's; and
+and key version; the chip counter as "N, fresh" or "N, already seen" against the server's; a
+**Keys** line from the chip's own GetKeyVersion values (all 0 → "factory", all the same non-zero
+N → "Piña (version N)", otherwise "mixed (0/1/1)", or "unknown" if the chip refused; absent for a
+chip that isn't an NTAG 424 DNA). The chip-side versions are the ground truth for who owns the
+keys, which is why a `bad_cmac` URL on a factory-key chip reads as a reset chip. And
 always the UID and the URL (if any) at the foot. When the UID is bound to a different row than
 the URL names, a note says so. Reader mode stays on: holding another tag starts over, **Scan
 another** clears the card, **Done** goes back to the web view and reloads it.
@@ -306,8 +317,11 @@ rev 2.0 (`app/src/test/.../An12196.kt`). The library's RndA comes from the publi
   record, and refused select / ReadData. `VerifyVerdictTest`: the verdict line and reasons, and the
   error messages. `AdminApiTest`: `verify` request body and path (with and without tagId), success
   parsing, and each error code (401, malformed, bad_cmac, unknown_tag, unsigned, keys_missing).
-- **Identify** (`IdentifyVerdictTest`): each verdict case above, select refused / read refused
-  notes, the `TagReadException` → `ChipRead` mapping, the UID rule (7 bytes, not `08`) and error
+- **Identify** (`TagVerifierTest`): the exact APDU sequence select, ReadData, GetKeyVersion 0/1/2;
+  key versions still read after a blank or refused ReadData; a refused GetKeyVersion (first or
+  later) gives null versions; refused select throws. (`IdentifyVerdictTest`): each verdict case
+  above including `factory`, `bad_cmac` × factory / Piña N / mixed / unknown keys, the Keys line,
+  select refused / read refused notes, the `TagReadException` → `ChipRead` and `scanChip` mappings, the UID rule (7 bytes, not `08`) and error
   messages. `AdminApiTest`: `identify` with and without a URL (body, path, nullable fields), 401
   and 400 malformed.
 - **Reset** (`ChipResetTest`, checked by `RefSession`/`RefAuthChip`): a full reset from version-1

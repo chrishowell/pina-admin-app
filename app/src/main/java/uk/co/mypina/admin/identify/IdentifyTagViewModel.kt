@@ -34,12 +34,12 @@ data class IdentifyState(
 )
 
 /**
- * One tap = the UID from the ISO-DEP tag id, one keyless read of the chip ([readChip]: select + a
- * single ReadData, "no URL" outcomes folded into [ChipRead]) and one POST to the identify endpoint
+ * One tap = the UID from the ISO-DEP tag id, one keyless read of the chip ([readChip]: select, a
+ * single ReadData and GetKeyVersion 0/1/2, "no URL" outcomes folded into [ChipScan]) and one POST to the identify endpoint
  * ([identify]). Reader mode stays on, so the next tag held to the phone starts over.
  */
 class IdentifyTagViewModel(
-    private val readChip: (IsoDep) -> ChipRead,
+    private val readChip: (IsoDep) -> ChipScan,
     private val identify: (uid: String, url: String?) -> IdentifyResponse,
 ) : ViewModel() {
 
@@ -84,8 +84,8 @@ class IdentifyTagViewModel(
             var url: String? = null
             try {
                 ensureActive()
-                val read = if (iso == null) {
-                    ChipRead.NotNtag424("no ISO-DEP")
+                val scan = if (iso == null) {
+                    ChipScan(ChipRead.NotNtag424("no ISO-DEP"))
                 } else {
                     try {
                         readChip(iso)
@@ -95,11 +95,11 @@ class IdentifyTagViewModel(
                         runCatching { iso.close() }
                     }
                 }
-                url = read.url
+                url = scan.read.url
                 _state.update { it.copy(phase = IdentifyPhase.CHECKING, url = url) }
                 val response = identify(uid, url)
                 _state.update {
-                    it.copy(phase = IdentifyPhase.DONE, result = response, verdict = identifyVerdict(response, read))
+                    it.copy(phase = IdentifyPhase.DONE, result = response, verdict = identifyVerdict(response, scan.read, scan.keyVersions))
                 }
             } catch (e: CancellationException) {
                 throw e

@@ -18,6 +18,17 @@ class TagReadException(val kind: Kind, message: String) : Exception(message) {
 }
 
 /**
+ * What [TagVerifier.readForIdentify] found. [url] is the tap URL, or null with [noUrl] saying why
+ * (blank chip / no URI record, or the ReadData refused). [keyVersions] are keys 0, 1 and 2 as
+ * GetKeyVersion reports them, or null if the chip refused GetKeyVersion.
+ */
+data class IdentifyRead(
+    val url: String?,
+    val noUrl: TagReadException? = null,
+    val keyVersions: List<Int>? = null,
+)
+
+/**
  * Reads the tap URL from an NTAG 424 DNA chip for the Verify screen, **without authenticating
  * and without any key**, exactly as a customer's phone would. Free of Android types so it is
  * unit-tested against [FakeTransceiver]-style lambdas; [readUrl] for [IsoDep] is the adapter.
@@ -33,12 +44,48 @@ class TagReadException(val kind: Kind, message: String) : Exception(message) {
  * increments the chip's SDMReadCtr and produces a fresh e=/c=, so reading NLEN and then the record
  * would cost two counter values and the URL would carry the second. One 256-byte read covers any
  * URL the file can hold; NLEN and the URI record are then parsed from it with [NdefUri].
+ *
+ * [readForIdentify] (the Identify screen) sends the same two commands, then GetKeyVersion for keys
+ * 0, 1 and 2: `90 64 00 00 01 0K 00` → `VV 91 00`, plain and unauthenticated. GetKeyVersion doesn't
+ * touch SDMReadCtr, so there is still exactly one counter-consuming read. [readUrl] (Verify) is
+ * unchanged.
  */
 class TagVerifier(private val transceive: (ByteArray) -> ByteArray) {
 
     fun readUrl(): String {
         select()
-        val file = readFile()
+        return parseUrl(readFile())
+    }
+
+    /**
+     * Select, the one ReadData, then GetKeyVersion 0/1/2. A refused select still throws
+     * (NOT_NTAG424); a blank or refused read is kept in [IdentifyRead.noUrl] and the key versions
+     * are still read. A refused GetKeyVersion stops there and leaves the versions null.
+     */
+    fun readForIdentify(): IdentifyRead {
+        select()
+        var url: String? = null
+        var noUrl: TagReadException? = null
+        try {
+            url = parseUrl(readFile())
+        } catch (e: TagReadException) {
+            noUrl = e
+        }
+        return IdentifyRead(url, noUrl, readKeyVersions())
+    }
+
+    /** GetKeyVersion for keys 0..2, plain; null as soon as the chip refuses one. */
+    private fun readKeyVersions(): List<Int>? {
+        val out = ArrayList<Int>(3)
+        for (key in 0..2) {
+            val r = send(getKeyVersion(key))
+            if (sw(r) != 0x9100 || r.size != 3) return null
+            out += r[0].toInt() and 0xFF
+        }
+        return out
+    }
+
+    private fun parseUrl(file: ByteArray): String {
         if (file.size < 2 || (file[0].toInt() or file[1].toInt()) == 0) throw noUrl()
         return try {
             NdefUri.parseFile(file)
@@ -101,8 +148,14 @@ class TagVerifier(private val transceive: (ByteArray) -> ByteArray) {
 
         val CONTINUE: ByteArray = byteArrayOf(0x90.toByte(), 0xAF.toByte(), 0x00, 0x00, 0x00)
 
+        /** GetKeyVersion, CommMode.PLAIN: `90 64 00 00 01 KeyNo 00`. */
+        fun getKeyVersion(key: Int): ByteArray = byteArrayOf(0x90.toByte(), 0x64, 0x00, 0x00, 0x01, key.toByte(), 0x00)
+
         /** The Android adapter: [iso] connected by the caller, who also closes it. */
         fun readUrl(iso: IsoDep): String = TagVerifier { iso.transceive(it) }.readUrl()
+
+        /** The Identify screen's read over [iso] (connected and closed by the caller). */
+        fun readForIdentify(iso: IsoDep): IdentifyRead = TagVerifier { iso.transceive(it) }.readForIdentify()
 
         private fun sw(r: ByteArray) = ((r[r.size - 2].toInt() and 0xFF) shl 8) or (r[r.size - 1].toInt() and 0xFF)
         private fun swHex(r: ByteArray) = "%04X".format(sw(r))

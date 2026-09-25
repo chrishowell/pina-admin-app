@@ -41,12 +41,12 @@ import uk.co.mypina.admin.ui.NfcReaderScreen
 import uk.co.mypina.admin.verify.formatDate
 
 /**
- * Identify tag: reads any chip without keys (UID, then the URL if it has one) and asks the server
- * what it is: which tag row the UID is bound to, and what the URL says and whether it verifies.
+ * Identify tag: reads any chip without keys (UID, the URL if it has one, and keys 0/1/2's
+ * versions) and asks the server what it is: which tag row the UID is bound to, and what the URL says and whether it verifies.
  */
 @Composable
 fun IdentifyTagScreen(
-    readChip: (IsoDep) -> ChipRead,
+    readChip: (IsoDep) -> ChipScan,
     identify: (uid: String, url: String?) -> IdentifyResponse,
     onClose: () -> Unit,
 ) {
@@ -148,6 +148,7 @@ private fun ResultCard(r: IdentifyResponse, v: IdentifyVerdict, url: String?) {
             v.tag?.let { TagFields(it, labelWidth = w) }
             v.counter?.let { Field("Chip counter", it, labelWidth = w) }
             if (v.tag != null || v.counter != null) HorizontalDivider()
+            v.keys?.let { Field("Keys", it, labelWidth = w) }
             Field("UID", r.uid, mono = true, labelWidth = w)
             url?.let { UrlLine(it) }
         }

@@ -14,7 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import uk.co.mypina.admin.api.AdminApi
 import uk.co.mypina.admin.identify.IdentifyTagScreen
-import uk.co.mypina.admin.identify.readChip
+import uk.co.mypina.admin.identify.scanChip
 import uk.co.mypina.admin.nfc.TagVerifier
 import uk.co.mypina.admin.nfc.TagWriters
 import uk.co.mypina.admin.ui.theme.PinaTheme
@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
                         }
                         Screen.IdentifyTag -> ScopedViewModelStore(key = current) {
                             IdentifyTagScreen(
-                                readChip = { iso -> readChip { TagVerifier.readUrl(iso) } },
+                                readChip = { iso -> scanChip { TagVerifier.readForIdentify(iso) } },
                                 identify = api::identify,
                                 onClose = backToWeb,
                             )
