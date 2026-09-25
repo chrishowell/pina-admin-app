@@ -289,6 +289,9 @@ internal object ChipCommands {
         is MACValidationException -> TagWriteException(step, "The chip's reply to \"${step.label}\" failed its integrity check. Hold it again.", e)
         is ProtocolException -> TagWriteException(step, "The chip refused \"${step.label}\" (status ${statusOf(comm.lastCommandResult)}). Hold it again to continue.", e)
         is IOException -> TagWriteException(step, "Lost contact with the chip at \"${step.label}\". Hold it again to continue.", e)
+        // Android throws SecurityException("Tag out of date") from transceive when the chip briefly
+        // left the field and was re-discovered with a new handle: a contact problem, not a security one.
+        is SecurityException -> TagWriteException(step, "The chip lost contact at \"${step.label}\" (stale tag). Hold it flat and still against the back of the phone, then try again.", e)
         is IllegalArgumentException -> TagWriteException(step, "Unexpected data at \"${step.label}\".", e)
         else -> TagWriteException(step, "Something went wrong at \"${step.label}\" (${e.javaClass.simpleName}).", e)
     }

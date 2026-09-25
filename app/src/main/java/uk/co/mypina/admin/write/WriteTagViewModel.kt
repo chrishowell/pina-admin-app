@@ -120,8 +120,15 @@ class WriteTagViewModel(
                     ?: _state.value.steps.entries.firstOrNull { it.value == StepState.RUNNING }?.key
                     ?: _state.value.steps.entries.firstOrNull { it.value == StepState.PENDING }?.key
                     ?: Step.VERIFIED
-                // Class name only: messages from the chip library could carry APDU bytes.
-                Log.w(TAG, "${mode.name.lowercase()} failed at $step: ${e.javaClass.simpleName}")
+                // Class names only: messages from the chip library could carry APDU bytes. Android's own
+                // exceptions (SecurityException "Tag out of date", TagLostException) are safe and useful.
+                val cause = e.cause
+                val causeNote = when (cause) {
+                    null -> ""
+                    is SecurityException, is TagLostException -> " caused by ${cause.javaClass.simpleName}: ${cause.message}"
+                    else -> " caused by ${cause.javaClass.simpleName}"
+                }
+                Log.w(TAG, "${mode.name.lowercase()} failed at $step: ${e.javaClass.simpleName}$causeNote")
                 fail(step, messageFor(e), retryable = isRetryable(e))
             } finally {
                 activeIso = null
