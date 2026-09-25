@@ -173,6 +173,25 @@ Reader mode stays on after a result or an error: holding another tag (or the sam
 the phone starts a new check, and **Scan another** clears the card. **Done** goes back to the web
 view and reloads the page. The chip is closed right after its one read, before the server call.
 
+## Reset chip to factory keys
+
+A chip's keys are derived by the server that wrote it, so a chip written against the dev server
+can't be written by production (or the other way round): production's Write screen stops with
+"This chip's key 0 is not factory or Piña's". To move a chip between servers, first put its keys
+back to factory **from the server that wrote it**: on that server's Write screen for the chip's
+tag, open the ⋮ menu → **Reset chip to factory keys…**, confirm, and hold the tag to the phone.
+The chip can then be written by the other server as if it were new.
+
+`nfc/ChipReset.kt` (pure, same shape as `ChipSequence`): select, GetKeyVersion 0/1/2, then
+`POST …/personalise` for the UID, used only for this server's derived keys (it changes nothing on
+the server, but it does apply its usual checks, so use the tag the chip belongs to). Key 0 at
+version 0 authenticates with the factory key; at Piña's version, with this server's derived key 0
+only (if that fails: "This chip was written by a different server; reset it from that server.").
+Then ChangeKey 1 and 2 to zeros version 0 (old key = derived key) and key 0 to zeros version 0
+last; any slot already at version 0 is skipped, so an interrupted reset can simply be held again.
+It finishes by re-selecting and checking all three versions read 0. The NDEF file, the SDM settings
+and the tag row on the server are left as they are (`personalised` is not called).
+
 ## The chip sequence (`nfc/ChipSequence.kt`)
 
 Per guide §3, with state detection so a half-written chip can simply be held again:
@@ -236,6 +255,11 @@ rev 2.0 (`app/src/test/.../An12196.kt`). The library's RndA comes from the publi
   record, and refused select / ReadData. `VerifyVerdictTest`: the verdict line and reasons, and the
   error messages. `AdminApiTest`: `verify` request body and path (with and without tagId), success
   parsing, and each error code (401, malformed, bad_cmac, unknown_tag, unsigned, keys_missing).
+- **Reset** (`ChipResetTest`, checked by `RefSession`/`RefAuthChip`): a full reset from version-1
+  keys (each ChangeKey payload decrypted: derived key ⊕ zeros, version 0, CRC of the zero key; key
+  0 last; then versions 0/0/0), an already-factory chip (Table 14, no ChangeKey), a factory key 0
+  with keys 1/2 still set, a foreign key 0 (one authentication only), a partly reset chip (two
+  ChangeKeys), a version still at 1 after the reset, an unknown key version, and Random ID.
 - Also: NDEF read-back parsing, the SDM data field vs the server's hex (and Table 18), key-version
   skip logic, key 0 candidate order (derived first at the target version, factory first at 0),
   error mapping (wrong key 0, `91 AD`, status errors, mismatched read-back).

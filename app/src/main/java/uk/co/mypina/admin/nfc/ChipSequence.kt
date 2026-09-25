@@ -50,16 +50,7 @@ class ChipSequence(
     private val personalise: (uidHex: String) -> PersonaliseResponse,
     private val personalised: (uidHex: String, url: String) -> PersonalisedResponse,
 ) {
-    // NB: inside apply{}, a bare `transceive` would resolve to DnaCommunicator.transceive.
-    private val chip: (ByteArray) -> ByteArray = transceive
-    private val comm = DnaCommunicator().apply {
-        setTransceiver { apdu ->
-            val r = chip(apdu)
-            // CommandResult needs at least the two status bytes.
-            if (r.size < 2) throw IOException("Short response from the chip")
-            r
-        }
-    }
+    private val comm = ChipCommands.communicator(transceive)
 
     /** Which step to blame if something throws. */
     private var current = Step.READ_UID
@@ -197,27 +188,81 @@ class ChipSequence(
 
     // ---- chip commands -------------------------------------------------------------------------
 
+    private fun selectNdefApplication() = ChipCommands.selectNdefApplication(comm, current)
+
+    private fun readKeyVersionsOrNull(): IntArray? = ChipCommands.readKeyVersionsOrNull(comm)
+
+    private fun readKeyVersions(): IntArray = ChipCommands.readKeyVersions(comm)
+
+    private fun authenticate(candidates: List<ByteArray>): ByteArray? = ChipCommands.authenticateKey0(comm, candidates)
+
+    /** ReadData in plain mode, following 91 AF continuation frames. */
+    private fun readPlain(fileNo: Int, length: Int): ByteArray {
+        var out = ReadData.run(comm, CommunicationMode.PLAIN, fileNo, 0, length)
+        var guard = 0
+        while (comm.lastCommandResult.status2 == CommandResult.ADDITIONAL_FRAME_EXPECTED && guard++ < 8) {
+            val more = comm.nxpNativeCommand(0xAF.toByte(), null, null, null)
+            more.throwUnlessSuccessful()
+            out += more.data
+        }
+        if (out.size < length) throw TagWriteException(Step.VERIFIED, "The chip returned ${out.size} of $length bytes.")
+        return out
+    }
+
+    private fun wrap(step: Step, e: Exception): TagWriteException = ChipCommands.wrap(comm, step, e)
+}
+
+/**
+ * The commands we send ourselves instead of through the library's command classes:
+ *  - GetFileSettings / WriteData: see [fileCommMode] and [writeData].
+ *  - WriteData (FULL) / ChangeFileSettings: the library's AESEncryptionMode.encryptData only pads when the
+ *    length is not a multiple of 16, but the chip always expects ISO/IEC 9797-1 method 2 padding:
+ *    AN12196 Table 17 writes 128 bytes as 144 encrypted bytes, and the library's WriteData would
+ *    send 128 and be rejected. We pad first, so encryptData sees a whole number of blocks and adds
+ *    nothing. (The library's ChangeKey for keys 1..4 always has 21 bytes, so it is used as is.)
+ *  - ChangeKey for key 0 (case 2, AN12196 §5.16.2 / Table 26): data = new key ‖ version. The chip
+ *    answers 91 00 without a MAC and ends the session. The library's ChangeKey then calls
+ *    restartSession(), which re-authenticates with the *old* key 0 remembered from login: that
+ *    must fail on the chip, adds a failed-authentication count, is ignored by restartSession
+ *    (it discards the boolean), and a transport error at that moment would surface as an
+ *    IOException indistinguishable from the ChangeKey itself failing. So we send the one command
+ *    and mark the session ended.
+ * Also the pieces [ChipSequence] and [ChipReset] share: the communicator, select, GetKeyVersion,
+ * key 0 authentication and the person-facing error mapping.
+ */
+internal object ChipCommands {
+    /** A communicator over [chip]; the library's logger is left at its default no-op. */
+    fun communicator(chip: (ByteArray) -> ByteArray): DnaCommunicator = DnaCommunicator().apply {
+        // NB: `chip`, not `transceive`: inside apply{} that would resolve to DnaCommunicator.transceive.
+        setTransceiver { apdu ->
+            val r = chip(apdu)
+            // CommandResult needs at least the two status bytes.
+            if (r.size < 2) throw IOException("Short response from the chip")
+            r
+        }
+    }
+
     /** ISOSelectFile by DF name (AN12196 Table 22): `00 A4 04 0C 07 D2760000850101 00` → 90 00. */
-    private fun selectNdefApplication() {
+    fun selectNdefApplication(comm: DnaCommunicator, step: Step) {
         val r = comm.transceive(byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x0C, Ntag424.DF_NAME.size.toByte(), *Ntag424.DF_NAME, 0x00))
         if (r.size < 2 || r[r.size - 2] != 0x90.toByte() || r[r.size - 1] != 0x00.toByte()) {
-            throw TagWriteException(current, "Couldn't select the chip's NDEF application (status ${statusOf(r)}). Is this an NTAG 424 DNA?")
+            throw TagWriteException(step, "Couldn't select the chip's NDEF application (status ${statusOf(r)}). Is this an NTAG 424 DNA?")
         }
         // Selecting ends any session on the chip; keep the library's view in step.
         comm.startEncryptedSession(null, 0, 0, null)
     }
 
     /** GetKeyVersion for keys 0..2 without authentication, or null if the chip refuses. */
-    private fun readKeyVersionsOrNull(): IntArray? = try {
-        readKeyVersions()
+    fun readKeyVersionsOrNull(comm: DnaCommunicator): IntArray? = try {
+        readKeyVersions(comm)
     } catch (e: ProtocolException) {
         null
     }
 
-    private fun readKeyVersions(): IntArray = IntArray(3) { GetKeyVersion.run(comm, it) and 0xFF }
+    fun readKeyVersions(comm: DnaCommunicator): IntArray = IntArray(3) { GetKeyVersion.run(comm, it) and 0xFF }
 
-    /** Tries each key 0 in order; returns the one that worked, or null if none did. */
-    private fun authenticate(candidates: List<ByteArray>): ByteArray? {
+    /** AuthenticateEV2First with key 0, trying each candidate in order; the one that worked, or null. */
+    fun authenticateKey0(comm: DnaCommunicator, candidates: List<ByteArray>): ByteArray? {
         for (key in candidates) {
             try {
                 if (AESEncryptionMode.authenticateEV2(comm, 0, key)) return key
@@ -238,22 +283,8 @@ class ChipSequence(
         return null
     }
 
-    /** ReadData in plain mode, following 91 AF continuation frames. */
-    private fun readPlain(fileNo: Int, length: Int): ByteArray {
-        var out = ReadData.run(comm, CommunicationMode.PLAIN, fileNo, 0, length)
-        var guard = 0
-        while (comm.lastCommandResult.status2 == CommandResult.ADDITIONAL_FRAME_EXPECTED && guard++ < 8) {
-            val more = comm.nxpNativeCommand(0xAF.toByte(), null, null, null)
-            more.throwUnlessSuccessful()
-            out += more.data
-        }
-        if (out.size < length) throw TagWriteException(Step.VERIFIED, "The chip returned ${out.size} of $length bytes.")
-        return out
-    }
-
-    // ---- errors --------------------------------------------------------------------------------
-
-    private fun wrap(step: Step, e: Exception): TagWriteException = when (e) {
+    /** A person-facing [TagWriteException] for [e] at [step]; never carries key material or APDUs. */
+    fun wrap(comm: DnaCommunicator, step: Step, e: Exception): TagWriteException = when (e) {
         is DelayException -> TagWriteException(step, "The chip is delaying authentication after failed attempts. Wait a minute, then hold it again.", e)
         is MACValidationException -> TagWriteException(step, "The chip's reply to \"${step.label}\" failed its integrity check. Hold it again.", e)
         is ProtocolException -> TagWriteException(step, "The chip refused \"${step.label}\" (status ${statusOf(comm.lastCommandResult)}). Hold it again to continue.", e)
@@ -262,32 +293,12 @@ class ChipSequence(
         else -> TagWriteException(step, "Something went wrong at \"${step.label}\" (${e.javaClass.simpleName}).", e)
     }
 
-    companion object {
-        private fun statusOf(r: CommandResult?): String =
-            if (r == null) "none" else "%02X%02X".format(r.status1.toInt() and 0xFF, r.status2.toInt() and 0xFF)
+    fun statusOf(r: CommandResult?): String =
+        if (r == null) "none" else "%02X%02X".format(r.status1.toInt() and 0xFF, r.status2.toInt() and 0xFF)
 
-        private fun statusOf(raw: ByteArray): String =
-            if (raw.size < 2) "none" else "%02X%02X".format(raw[raw.size - 2].toInt() and 0xFF, raw[raw.size - 1].toInt() and 0xFF)
-    }
-}
+    private fun statusOf(raw: ByteArray): String =
+        if (raw.size < 2) "none" else "%02X%02X".format(raw[raw.size - 2].toInt() and 0xFF, raw[raw.size - 1].toInt() and 0xFF)
 
-/**
- * The commands we send ourselves instead of through the library's command classes:
- *  - GetFileSettings / WriteData: see [fileCommMode] and [writeData].
- *  - WriteData (FULL) / ChangeFileSettings: the library's AESEncryptionMode.encryptData only pads when the
- *    length is not a multiple of 16, but the chip always expects ISO/IEC 9797-1 method 2 padding:
- *    AN12196 Table 17 writes 128 bytes as 144 encrypted bytes, and the library's WriteData would
- *    send 128 and be rejected. We pad first, so encryptData sees a whole number of blocks and adds
- *    nothing. (The library's ChangeKey for keys 1..4 always has 21 bytes, so it is used as is.)
- *  - ChangeKey for key 0 (case 2, AN12196 §5.16.2 / Table 26): data = new key ‖ version. The chip
- *    answers 91 00 without a MAC and ends the session. The library's ChangeKey then calls
- *    restartSession(), which re-authenticates with the *old* key 0 remembered from login: that
- *    must fail on the chip, adds a failed-authentication count, is ignored by restartSession
- *    (it discards the boolean), and a transport error at that moment would surface as an
- *    IOException indistinguishable from the ChangeKey itself failing. So we send the one command
- *    and mark the session ended.
- */
-internal object ChipCommands {
     fun fitsOneWrite(n: Int) = n in 1..239 // FULL: Lc = 7 header + padded ciphertext + 8 MAC <= 255
 
     /**

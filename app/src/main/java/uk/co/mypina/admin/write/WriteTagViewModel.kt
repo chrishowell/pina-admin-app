@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uk.co.mypina.admin.api.ApiException
 import uk.co.mypina.admin.nfc.IsoDepConnection
+import uk.co.mypina.admin.nfc.RESET_STEPS
+import uk.co.mypina.admin.nfc.ResetResult
 import uk.co.mypina.admin.nfc.Step
 import uk.co.mypina.admin.nfc.StepState
 import uk.co.mypina.admin.nfc.TagWriteException
@@ -27,15 +29,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 enum class Phase { WAITING, WRITING, FAILED, DONE }
 
+/** WRITE personalises the chip; RESET puts its keys back to factory ([TagWriter.reset]). */
+enum class Mode { WRITE, RESET }
+
 data class WriteState(
+    val mode: Mode = Mode.WRITE,
     val phase: Phase = Phase.WAITING,
-    val steps: Map<Step, StepState> = Step.entries.associateWith { StepState.PENDING },
+    /** The steps shown, in order: every [Step] when writing, [RESET_STEPS] when resetting. */
+    val steps: Map<Step, StepState> = stepsFor(mode),
     val failedStep: Step? = null,
     val error: String? = null,
     /** False when holding the tag again won't help (not signed in, UID taken, ...). */
     val retryable: Boolean = true,
     val result: WriteResult? = null,
+    val resetResult: ResetResult? = null,
 )
+
+private fun stepsFor(mode: Mode): Map<Step, StepState> =
+    (if (mode == Mode.RESET) RESET_STEPS else Step.entries).associateWith { StepState.PENDING }
 
 class WriteTagViewModel(
     private val tagId: String,
@@ -50,10 +61,23 @@ class WriteTagViewModel(
     /** The chip being written, so [onCleared] can close it and abort a write in flight. */
     @Volatile private var activeIso: IsoDep? = null
 
+    /** Switches to reset mode (after the person confirmed). Ignored while a chip is being worked on. */
+    fun startReset() = switchMode(Mode.RESET)
+
+    /** Back to write mode from reset mode. Ignored while a chip is being worked on. */
+    fun cancelReset() = switchMode(Mode.WRITE)
+
+    private fun switchMode(mode: Mode) {
+        if (!busy.compareAndSet(false, true)) return
+        _state.value = WriteState(mode = mode)
+        busy.set(false)
+    }
+
     /** Called from the NFC reader-mode callback (a binder thread). */
     fun onTagDiscovered(tag: Tag) {
         if (_state.value.phase == Phase.DONE) return
         if (!busy.compareAndSet(false, true)) return
+        val mode = _state.value.mode // stable while busy: switchMode needs the flag too
 
         val iso = when (val c = connectIsoDep(tag)) {
             is IsoDepConnection.Connected -> c.iso
@@ -70,16 +94,25 @@ class WriteTagViewModel(
         }
 
         // Every attempt redoes the whole sequence; the writer's state detection skips what's done.
-        _state.value = WriteState(phase = Phase.WRITING)
+        _state.value = WriteState(mode = mode, phase = Phase.WRITING)
         activeIso = iso
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 ensureActive() // the screen may have gone between the tap and here
-                val result = writer.write(iso, tagId) { step, s ->
+                val onStep: (Step, StepState) -> Unit = { step, s ->
                     _state.update { it.copy(steps = it.steps + (step to s)) }
                 }
-                _state.update { it.copy(phase = Phase.DONE, result = result) }
+                when (mode) {
+                    Mode.WRITE -> {
+                        val result = writer.write(iso, tagId, onStep)
+                        _state.update { it.copy(phase = Phase.DONE, result = result) }
+                    }
+                    Mode.RESET -> {
+                        val result = writer.reset(iso, tagId, onStep)
+                        _state.update { it.copy(phase = Phase.DONE, resetResult = result) }
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -88,7 +121,7 @@ class WriteTagViewModel(
                     ?: _state.value.steps.entries.firstOrNull { it.value == StepState.PENDING }?.key
                     ?: Step.VERIFIED
                 // Class name only: messages from the chip library could carry APDU bytes.
-                Log.w(TAG, "Write failed at $step: ${e.javaClass.simpleName}")
+                Log.w(TAG, "${mode.name.lowercase()} failed at $step: ${e.javaClass.simpleName}")
                 fail(step, messageFor(e), retryable = isRetryable(e))
             } finally {
                 activeIso = null

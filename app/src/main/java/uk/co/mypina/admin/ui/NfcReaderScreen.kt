@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -48,6 +49,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
  * handle keys), NFC reader mode only while resumed (so Android doesn't open the tag's URL itself;
  * guide §5), a notice when the phone has no NFC or it is off, and a scrolling column for [content].
  *
+ * [actions] go at the end of the top bar (e.g. an overflow menu).
  * [onTag] is called on the NFC binder thread for each tag that comes into the field.
  * [purpose] finishes "This phone has no NFC, so it can't …" and "NFC is off. Turn it on to …".
  */
@@ -59,6 +61,7 @@ fun NfcReaderScreen(
     secure: Boolean,
     onTag: (Tag) -> Unit,
     onClose: () -> Unit,
+    actions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val activity = LocalContext.current.findActivity()
@@ -95,6 +98,7 @@ fun NfcReaderScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = actions,
             )
         },
     ) { padding ->

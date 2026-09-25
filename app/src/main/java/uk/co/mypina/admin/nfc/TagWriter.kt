@@ -50,6 +50,13 @@ class TagWriteException(val step: Step, message: String, cause: Throwable? = nul
  */
 interface TagWriter {
     fun write(iso: IsoDep, tagId: String, onStep: (Step, StepState) -> Unit): WriteResult
+
+    /**
+     * Puts keys 0, 1 and 2 back to factory zeros on a chip this server wrote ([ChipReset]), so
+     * another server can write it. Same contract as [write], with the steps in [RESET_STEPS]; the
+     * NDEF file, SDM settings and the tag row on the server are left alone.
+     */
+    fun reset(iso: IsoDep, tagId: String, onStep: (Step, StepState) -> Unit): ResetResult
 }
 
 /** The single place that decides which writer the app uses. */

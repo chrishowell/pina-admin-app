@@ -14,16 +14,25 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -32,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import uk.co.mypina.admin.nfc.ResetResult
 import uk.co.mypina.admin.nfc.Step
 import uk.co.mypina.admin.nfc.StepState
 import uk.co.mypina.admin.nfc.TagWriter
@@ -49,14 +59,34 @@ fun WriteTagScreen(
         factory = viewModelFactory { initializer { WriteTagViewModel(tagId, writerFactory()) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    val resetting = state.mode == Mode.RESET
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmReset by remember { mutableStateOf(false) }
 
     // Keys pass through this screen: no screenshots (FLAG_SECURE), and keep it on until Done shows.
     NfcReaderScreen(
-        title = "Write tag",
-        purpose = "write tags",
+        title = if (resetting) "Reset chip" else "Write tag",
+        purpose = if (resetting) "reset chips" else "write tags",
         secure = true,
         onTag = vm::onTagDiscovered,
         onClose = onClose,
+        actions = {
+            if (!resetting) {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Reset chip to factory keys…") },
+                        enabled = state.phase != Phase.WRITING,
+                        onClick = {
+                            menuOpen = false
+                            confirmReset = true
+                        },
+                    )
+                }
+            }
+        },
     ) {
         if (state.phase != Phase.DONE) {
             Text("Hold the tag to the back of the phone.", style = MaterialTheme.typography.titleLarge)
@@ -74,6 +104,7 @@ fun WriteTagScreen(
         if (state.phase == Phase.FAILED) ErrorCard(state)
 
         state.result?.let { ResultCard(it) }
+        state.resetResult?.let { ResetResultCard(it) }
 
         when {
             state.phase == Phase.DONE ->
@@ -81,6 +112,31 @@ fun WriteTagScreen(
             state.phase == Phase.FAILED && !state.retryable ->
                 OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Back to the website") }
         }
+        if (resetting && state.phase != Phase.WRITING && state.phase != Phase.DONE) {
+            OutlinedButton(onClick = vm::cancelReset, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+        }
+    }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Reset chip to factory keys?") },
+            text = {
+                Text(
+                    "This puts keys 0, 1 and 2 back to factory zeros so another server can write the chip. " +
+                        "The tag row on this server is not changed.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    vm.startReset()
+                }) { Text("Reset") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -88,8 +144,7 @@ fun WriteTagScreen(
 private fun StepList(steps: Map<Step, StepState>) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(vertical = 8.dp)) {
-            Step.entries.forEach { step ->
-                val s = steps[step] ?: StepState.PENDING
+            steps.forEach { (step, s) ->
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -159,6 +214,16 @@ private fun ResultCard(result: WriteResult) {
             Field("Shop", result.shopName)
             Field("UID", result.uid, mono = true)
             Field("Counter", result.counter.toString())
+        }
+    }
+}
+
+@Composable
+private fun ResetResultCard(result: ResetResult) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Chip reset to factory keys", style = MaterialTheme.typography.titleMedium)
+            Field("UID", result.uid, mono = true)
         }
     }
 }
