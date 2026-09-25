@@ -80,10 +80,15 @@ KEYSTORE_FILE=~/.pina-admin/release.jks KEYSTORE_PASSWORD="$(cat ~/.pina-admin/k
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
-Without `KEYSTORE_FILE` the release APK is unsigned and won't install. Debug and release share the
-application id, so switching between them on a phone needs `adb uninstall uk.co.mypina.admin`
-first (the signatures differ). Back up `~/.pina-admin`: losing the keystore means every future
-release build has to be reinstalled from scratch on each phone.
+Without `KEYSTORE_FILE` the release APK is unsigned and won't install. The debug build has its
+own application id (`uk.co.mypina.admin.dev`, shown as "Piña Admin dev"), so both builds can be
+installed side by side: the dev one for the local server, the release one for production. Each
+keeps its own sign-in. Back up `~/.pina-admin`: losing the keystore means every future release
+build has to be reinstalled from scratch on each phone.
+
+A chip written by one server can only be rewritten by that server (its keys are derived from that
+server's master key). To move a chip from dev to production, reset it from the dev app first (see
+"Reset chip to factory keys"), then write it from the production app.
 
 ### CI
 

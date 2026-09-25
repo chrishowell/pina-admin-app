@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Overrides main/res so the dev build is distinguishable on the phone. -->
+    <string name="app_name">Piña Admin dev</string>
+</resources>

@@ -33,6 +33,8 @@ android {
 
     buildTypes {
         debug {
+            // Its own application id, so "Piña Admin dev" installs alongside the production app.
+            applicationIdSuffix = ".dev"
             // Dev server on the Mac, reached from the phone via `adb reverse tcp:3000 tcp:3000`.
             buildConfigField("String", "ADMIN_BASE_URL", "\"http://localhost:3000\"")
         }
